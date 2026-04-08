@@ -1,0 +1,53 @@
+services:
+
+  # ── Model server ─────────────────────────────────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    volumes:
+      - ollama_data:/root/.ollama   # model weights persist here across restarts
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ── One-shot model pull ───────────────────────────────────────────────────────
+  # Pulls gemma4:e4b into the ollama_data volume on first run, then exits.
+  # On subsequent `docker compose up` runs Ollama finds the weights already
+  # present and this container exits immediately (curl returns quickly).
+  model-puller:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    # --max-time 3600: allow up to 1 hour for the initial download
+    # The response streams progress JSON until done, then the connection closes.
+    command: >
+      curl --silent --show-error --max-time 3600
+      -X POST http://ollama:11434/api/pull
+      -H "Content-Type: application/json"
+      -d '{"model":"gemma4:e4b"}'
+    restart: "no"
+
+  # ── Interactive CLI ───────────────────────────────────────────────────────────
+  cli:
+    build:
+      context: .
+      target: cli
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - MODEL_NAME=${MODEL_NAME:-gemma4:e4b}
+      - PROMPTS_DIR=/app/prompts
+    volumes:
+      - ./prompts:/app/prompts:ro   # live-edit prompts without rebuilding
+    stdin_open: true
+    tty: true
+
+volumes:
+  ollama_data:

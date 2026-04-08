@@ -1,0 +1,48 @@
+# ── Binaries ──────────────────────────────────────────────────────────────────
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Go build outputs
+homunculus
+cli
+api
+
+# ── Go toolchain ──────────────────────────────────────────────────────────────
+# Test cache and coverage
+*.test
+*.out
+coverage.html
+
+# ── Environment ───────────────────────────────────────────────────────────────
+# Never commit real env files — only .env.example
+.env
+.env.local
+.env.*.local
+
+# ── Docker ────────────────────────────────────────────────────────────────────
+# Ignore local volume data if ever bind-mounted for inspection
+ollama_data/
+chroma_data/
+workspace/
+
+# ── Editor / OS ───────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Claude ─────────────────────────────────────────────────────────────────────
+.claude/
