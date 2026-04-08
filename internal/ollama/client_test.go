@@ -68,7 +68,10 @@ func TestChat_Success(t *testing.T) {
 			t.Errorf("expected /api/chat, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(mockResponse(want))
+		_, err := w.Write(mockResponse(want))
+		if err != nil {
+			t.Errorf("failed to write mock response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -102,7 +105,10 @@ func TestChatStream_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Write(mockStreamResponse(want))
+		_, err := w.Write(mockStreamResponse(want))
+		if err != nil {
+			t.Errorf("failed to write mock stream response: %v", err)
+		}
 	}))
 	defer srv.Close()
 
@@ -129,7 +135,10 @@ func TestChatStream_CallbackNotCalledOnEmpty(t *testing.T) {
 			`{"message":{"role":"assistant","content":""},"done":false}`,
 			`{"message":{"role":"assistant","content":"Hi"},"done":true}`,
 		}
-		w.Write([]byte(strings.Join(lines, "\n") + "\n"))
+		_, err := w.Write([]byte(strings.Join(lines, "\n") + "\n"))
+		if err != nil {
+			t.Errorf("failed to write mock stream response: %v", err)
+		}
 	}))
 	defer srv.Close()
 

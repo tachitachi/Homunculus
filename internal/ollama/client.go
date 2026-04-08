@@ -16,7 +16,7 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-// Options controls model sampling behaviour. Zero values are omitted so Ollama
+// Options controls model sampling behavior. Zero values are omitted so Ollama
 // uses its own defaults.
 type Options struct {
 	Temperature float64 `json:"temperature,omitempty"`
