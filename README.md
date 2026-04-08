@@ -1,5 +1,29 @@
 # Homunculus
 
+```text
+   00                                              000  
+     00000000                              00000000     
+          0000                            0000          
+          0   0 0                      0     0          
+        0         00000000000000000         0           
+  000    000 000000000000000000000000000 00    0        
+    000000000000000000000000000000000000000000          
+ 000   00000000000000000000000000000000000000 000       
+     0000000000000000               0000000000          
+     0000000000000         0           00000000         
+    0   00  0000          0000           0000000        
+    00000   000         0000000           000000        
+    00000 0  000   00   0      0  00       000000       
+    0000  0   0      00          0         000000       
+          00        0000        0000       00000        
+          000     00000000    00000000    000000        
+           000                           000000         
+            0000           00          000000           
+              000000               00000000             
+                 00000000000000000000000                
+                      0 00000000 0                      
+```
+
 Homunculus is a learning-first project that builds a coding AI agent from first principles. It grows through six iterative phases — from a raw HTTP call to a local language model all the way to a self-correcting coding agent that can write, run, and debug code autonomously. Every concept is built by hand before any framework abstracts it away.
 
 **Primary language:** Go. Strong typing and compilation make the agent's internals — tool interfaces, typed API structs, parsed response types — self-documenting and compiler-verified. Python appears only where the ecosystem forces it: inside the code execution sandbox, and in the optional Streamlit UI.
@@ -77,6 +101,25 @@ docker compose version    # should print v2.x.x
 go version                # should print go1.23 or later
 ```
 
+### GPU support (optional but recommended)
+
+The `docker-compose.yml` already includes NVIDIA GPU passthrough. To activate it:
+
+1. Install the latest **NVIDIA Game Ready or Studio drivers** for your GPU
+2. On Windows, Docker Desktop with the **WSL2 backend** picks up NVIDIA drivers automatically — no extra steps needed
+3. On Linux, install the **NVIDIA Container Toolkit**:
+   ```bash
+   curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+   sudo apt-get install -y nvidia-container-toolkit
+   sudo nvidia-ctk runtime configure --runtime=docker
+   sudo systemctl restart docker
+   ```
+4. Verify Docker can see your GPU: `docker run --rm --gpus all nvidia/cuda:12.0-base nvidia-smi`
+
+If you don't have an NVIDIA GPU or prefer CPU-only, remove the `deploy:` block from the `ollama` service in `docker-compose.yml`. Inference will be slower but fully functional.
+
+**AMD GPU (ROCm):** Replace `image: ollama/ollama:latest` with `image: ollama/ollama:rocm` and change `driver: nvidia` to `driver: amdgpu`.
+
 ---
 
 ## Quick Start (Phase 1)
@@ -113,6 +156,53 @@ What just happened:
 - Docker Compose created a bridge network so services can reach each other by name (e.g., `http://ollama:11434`)
 - The `ollama_data` volume stored the model weights so the pull won't repeat on next startup
 - The Go `OllamaClient` sent a raw `POST /api/chat` request — no SDK, just `net/http` and typed structs
+
+---
+
+## Development Tools
+
+Day-to-day development uses [Task](https://taskfile.dev) for common commands and `golangci-lint` for static analysis.
+
+### Install
+
+```bash
+# Task runner
+go install github.com/go-task/task/v3/cmd/task@latest
+
+# golangci-lint (linter aggregator)
+go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+```
+
+### Available commands
+
+Both `task` and `make` are supported — they run the same underlying commands.
+
+| Task | Make | Description |
+|------|------|-------------|
+| `task build` | `make build` | Compile CLI binary to `build/homunculus` |
+| `task run` | `make run` | Run CLI locally (needs Ollama on `localhost:11434`) |
+| `task test` | `make test` | Run unit tests (skips integration tests) |
+| `task test:integration` | `make test-integration` | Run integration tests against live Ollama |
+| `task lint` | `make lint` | Run `golangci-lint` |
+| `task clean` | `make clean` | Remove `build/` directory |
+
+### Typical development loop
+
+```bash
+# 1. Start Ollama in the background (GPU-accelerated if drivers are installed)
+docker compose up ollama -d
+
+# 2. Edit source files, then run locally without rebuilding Docker images
+task run
+
+# 3. Run tests before committing
+task test
+
+# 4. Check for lint issues
+task lint
+```
+
+`task run` sets `OLLAMA_BASE_URL=http://localhost:11434` and `PROMPTS_DIR=./prompts` automatically, so you can edit `prompts/system.txt` and re-run without touching env vars.
 
 ---
 

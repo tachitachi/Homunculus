@@ -1,0 +1,39 @@
+version: '3'
+
+tasks:
+  build:
+    desc: Compile the CLI binary to build/homunculus
+    cmds:
+      - go build -o build/homunculus ./cmd/cli
+
+  run:
+    desc: Run the CLI locally (requires Ollama running — start with `docker compose up ollama`)
+    env:
+      OLLAMA_BASE_URL: http://localhost:11434
+      MODEL_NAME: '{{.MODEL_NAME | default "gemma4:e4b"}}'
+      PROMPTS_DIR: ./prompts
+    cmds:
+      - go run ./cmd/cli
+
+  test:
+    desc: Run unit tests (skips integration tests)
+    cmds:
+      - go test ./... -short -v
+
+  test:integration:
+    desc: Run integration tests against a live Ollama instance on localhost:11434
+    env:
+      INTEGRATION: "1"
+      OLLAMA_BASE_URL: http://localhost:11434
+    cmds:
+      - go test ./... -v -run Integration -timeout 60s
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.11.3 run
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf build/
