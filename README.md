@@ -120,7 +120,7 @@ What just happened:
 
 | Phase | Title | Status | Key Concept |
 |-------|-------|--------|-------------|
-| [1](#phase-1--foundation-ollama--gemma-4-e4b--go-client) | Foundation | TODO | Raw HTTP client, Docker Compose |
+| [1](#phase-1--foundation-ollama--gemma-4-e4b--go-client) | Foundation | IN PROGRESS | Raw HTTP client, Docker Compose |
 | [2](#phase-2--react-loop-reasoning--acting-from-scratch) | ReAct Loop | TODO | Agents are just a loop + a prompt + a parser |
 | [3](#phase-3--tool-expansion-code-sandbox--file-operations) | Tool Expansion | TODO | Docker as a security primitive |
 | [4](#phase-4--memory-conversation-history--vector-store) | Memory | TODO | Statelessness, embeddings, ChromaDB |
