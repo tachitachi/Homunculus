@@ -7,7 +7,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tachitachi/homunculus/internal/agent"
 	"github.com/tachitachi/homunculus/internal/ollama"
+	"github.com/tachitachi/homunculus/internal/tools"
 )
 
 func main() {
@@ -15,21 +17,25 @@ func main() {
 	model := getenv("MODEL_NAME", "gemma4:e4b")
 	promptsDir := getenv("PROMPTS_DIR", "./prompts")
 
-	systemPrompt, err := loadPrompt(promptsDir + "/system.txt")
+	reactPrompt, err := loadPrompt(promptsDir + "/react.txt")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading system prompt: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error loading react prompt: %v\n", err)
 		os.Exit(1)
 	}
 
+	registry := tools.NewRegistry()
+	registry.Register(tools.Calculator{})
+	registry.Register(tools.NewWebSearch())
+
+	// Inject the tool list into the prompt template.
+	systemPrompt := strings.ReplaceAll(reactPrompt, "{{TOOLS}}", registry.Descriptions())
+
 	client := ollama.New(baseURL, model)
+	ag := agent.NewReActAgent(client, registry, systemPrompt)
 
-	messages := []ollama.Message{
-		{Role: "system", Content: systemPrompt},
-	}
-
-	fmt.Println("Homunculus — Phase 1")
+	fmt.Println("Homunculus — Phase 2 (ReAct)")
 	fmt.Printf("Model: %s at %s\n", model, baseURL)
-	fmt.Println("Type your message and press Enter. Ctrl+C to exit.")
+	fmt.Println("Type your question and press Enter. Ctrl+C to exit.")
 	fmt.Println()
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -39,30 +45,21 @@ func main() {
 			break
 		}
 
-		input := strings.TrimSpace(scanner.Text())
-		if input == "" {
+		query := strings.TrimSpace(scanner.Text())
+		if query == "" {
 			continue
 		}
-
-		messages = append(messages, ollama.Message{Role: "user", Content: input})
 
 		fmt.Println()
 
-		var reply strings.Builder
-		err := client.ChatStream(context.Background(), messages, nil, func(chunk string) {
-			fmt.Print(chunk)
-			reply.WriteString(chunk)
-		})
-
-		fmt.Print("\n\n")
-
+		answer, err := ag.Run(context.Background(), query)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			messages = messages[:len(messages)-1]
-			continue
+		} else {
+			fmt.Printf("\nFinal Answer: %s\n", answer)
 		}
 
-		messages = append(messages, ollama.Message{Role: "assistant", Content: reply.String()})
+		fmt.Println()
 	}
 
 	if err := scanner.Err(); err != nil {
