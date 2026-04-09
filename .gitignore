@@ -8,8 +8,6 @@
 
 # Go build outputs
 homunculus
-cli
-api
 
 # ── Go toolchain ──────────────────────────────────────────────────────────────
 # Test cache and coverage
