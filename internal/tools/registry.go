@@ -32,6 +32,13 @@ func (r *Registry) Get(name string) Tool {
 	return r.tools[name]
 }
 
+// Names returns all registered tool names in insertion order.
+func (r *Registry) Names() []string {
+	names := make([]string, len(r.order))
+	copy(names, r.order)
+	return names
+}
+
 // Descriptions returns a formatted string listing all tools and their
 // descriptions, ready to be injected into the ReAct system prompt.
 //

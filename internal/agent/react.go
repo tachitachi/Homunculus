@@ -2,31 +2,29 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/tachitachi/homunculus/internal/ollama"
 	"github.com/tachitachi/homunculus/internal/tools"
 )
 
-const (
-	defaultMaxIterations = 10
-	maxMalformedRetries  = 3
-)
+const defaultMaxIterations = 10
 
-// ReActAgent runs the Reasoning + Acting loop against an Ollama model.
-// It keeps calling the model, dispatching tool calls, and appending
-// observations until the model emits a Final Answer or MaxIterations is hit.
+// ReActAgent runs a tool-calling loop against an Ollama model using the
+// model's native tool-calling support. It sends the available tools in each
+// request and dispatches whatever tool calls the model returns until the model
+// produces a plain-text reply (no tool calls), which is treated as the final
+// answer.
 type ReActAgent struct {
 	Client        *ollama.Client
 	Registry      *tools.Registry
 	MaxIterations int
 	SystemPrompt  string
 
-	// OnThought is called each time a Thought line is printed. Optional.
-	// OnAction / OnObservation follow the same pattern.
-	OnThought     func(thought string)
-	OnAction      func(tool, input string)
+	// OnAction is called each time the model requests a tool call. Optional.
+	OnAction func(tool, input string)
+	// OnObservation is called with the tool result after execution. Optional.
 	OnObservation func(result string)
 }
 
@@ -40,113 +38,105 @@ func NewReActAgent(client *ollama.Client, registry *tools.Registry, systemPrompt
 	}
 }
 
-// Run executes the ReAct loop for the given query and returns the final answer.
-// Each iteration calls the model, parses the response, and either dispatches a
-// tool or returns the answer. Malformed responses are retried up to
-// maxMalformedRetries times per iteration before giving up.
+// Run executes the tool-calling loop for the given query and returns the final
+// answer. Each iteration calls the model with the full message history and the
+// tool definitions. If the model responds with tool calls they are executed and
+// their results appended to the history before the next iteration. When the
+// model responds with no tool calls its content is returned as the answer.
 func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
+	ollamaTools := a.buildTools()
 	messages := []ollama.Message{
 		{Role: "system", Content: a.SystemPrompt},
 		{Role: "user", Content: query},
 	}
 
-	// Stop generation the moment the model writes "\nObservation:" so it cannot
-	// hallucinate the tool result. The real observation is injected by this loop.
-	opts := &ollama.Options{
-		Stop: []string{"Observation:"},
-	}
-
-	malformed := 0
-
 	for i := range a.MaxIterations {
-		var sb strings.Builder
-		err := a.Client.ChatStream(ctx, messages, opts, func(chunk string) {
-			fmt.Print(chunk)
-			sb.WriteString(chunk)
-		})
-		fmt.Println() // newline after streamed output
+		msg, err := a.Client.ChatWithTools(ctx, messages, ollamaTools)
 		if err != nil {
 			return "", fmt.Errorf("react: model error on iteration %d: %w", i+1, err)
 		}
 
-		response := sb.String()
-		a.logThoughts(response)
+		// No tool calls — the model produced a final text reply.
+		if len(msg.ToolCalls) == 0 {
+			return msg.Content, nil
+		}
 
-		parsed := ParseResponse(response)
+		// Append the assistant turn (containing tool_calls) to history.
+		messages = append(messages, msg)
 
-		switch parsed.Type {
-		case TypeFinalAnswer:
-			return parsed.Answer, nil
-
-		case TypeAction:
-			malformed = 0
-			tool := a.Registry.Get(parsed.Tool)
-			if tool == nil {
-				obs := fmt.Sprintf("Error: unknown tool %q. Available tools: %s",
-					parsed.Tool, a.availableToolNames())
-				messages = a.appendObservation(messages, response, obs)
-				if a.OnObservation != nil {
-					a.OnObservation(obs)
-				}
-				continue
-			}
+		// Execute each tool call and append results as tool-role messages.
+		for _, tc := range msg.ToolCalls {
+			name := tc.Function.Name
+			input := argString(tc.Function.Arguments)
 
 			if a.OnAction != nil {
-				a.OnAction(parsed.Tool, parsed.Input)
+				a.OnAction(name, input)
 			}
 
-			result, err := tool.Run(ctx, parsed.Input)
+			t := a.Registry.Get(name)
 			var obs string
-			if err != nil {
-				obs = fmt.Sprintf("Error: %v", err)
+			if t == nil {
+				obs = fmt.Sprintf("Error: unknown tool %q", name)
 			} else {
-				obs = result
+				result, err := t.Run(ctx, input)
+				if err != nil {
+					obs = fmt.Sprintf("Error: %v", err)
+				} else {
+					obs = result
+				}
 			}
 
 			if a.OnObservation != nil {
 				a.OnObservation(obs)
 			}
 
-			messages = a.appendObservation(messages, response, obs)
-
-		case TypeMalformed:
-			malformed++
-			if malformed > maxMalformedRetries {
-				return "", fmt.Errorf("react: model produced %d consecutive malformed responses; giving up", malformed)
-			}
-			obs := "Error: your response did not follow the required format. " +
-				"You must use Thought/Action/Action Input or Thought/Final Answer."
-			messages = a.appendObservation(messages, response, obs)
-			if a.OnObservation != nil {
-				a.OnObservation(obs)
-			}
+			messages = append(messages, ollama.Message{
+				Role:    "tool",
+				Content: obs,
+			})
 		}
 	}
 
 	return "", fmt.Errorf("react: reached max iterations (%d) without a final answer", a.MaxIterations)
 }
 
-// appendObservation adds the assistant turn and an observation user turn to
-// the message history.
-func (a *ReActAgent) appendObservation(messages []ollama.Message, assistantText, observation string) []ollama.Message {
-	messages = append(messages, ollama.Message{Role: "assistant", Content: assistantText})
-	messages = append(messages, ollama.Message{Role: "user", Content: "Observation: " + observation})
-	return messages
+// buildTools converts the registry into Ollama tool definitions.
+// Each tool is exposed with a single "input" string parameter.
+func (a *ReActAgent) buildTools() []ollama.Tool {
+	names := a.Registry.Names()
+	out := make([]ollama.Tool, 0, len(names))
+	for _, name := range names {
+		t := a.Registry.Get(name)
+		out = append(out, ollama.Tool{
+			Type: "function",
+			Function: ollama.ToolFunction{
+				Name:        t.Name(),
+				Description: t.Description(),
+				Parameters: ollama.ToolParameters{
+					Type: "object",
+					Properties: map[string]ollama.ToolParameterProperty{
+						"input": {
+							Type:        "string",
+							Description: "The input to pass to the tool.",
+						},
+					},
+					Required: []string{"input"},
+				},
+			},
+		})
+	}
+	return out
 }
 
-// logThoughts scans the response for Thought: lines and calls OnThought.
-func (a *ReActAgent) logThoughts(response string) {
-	if a.OnThought == nil {
-		return
-	}
-	for line := range strings.SplitSeq(response, "\n") {
-		lower := strings.ToLower(line)
-		if strings.HasPrefix(lower, "thought:") {
-			a.OnThought(strings.TrimSpace(line[len("thought:"):]))
+// argString extracts the "input" key from tool call arguments as a string.
+// If the key is absent or not a string, it falls back to JSON-encoding the
+// entire arguments map so the tool still receives something meaningful.
+func argString(args map[string]any) string {
+	if v, ok := args["input"]; ok {
+		if s, ok := v.(string); ok {
+			return s
 		}
 	}
-}
-
-func (a *ReActAgent) availableToolNames() string {
-	return a.Registry.Descriptions()
+	b, _ := json.Marshal(args)
+	return string(b)
 }

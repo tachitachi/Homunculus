@@ -17,18 +17,15 @@ func main() {
 	model := getenv("MODEL_NAME", "gemma4:e4b")
 	promptsDir := getenv("PROMPTS_DIR", "./prompts")
 
-	reactPrompt, err := loadPrompt(promptsDir + "/react.txt")
+	systemPrompt, err := loadPrompt(promptsDir + "/system.txt")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error loading react prompt: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error loading system prompt: %v\n", err)
 		os.Exit(1)
 	}
 
 	registry := tools.NewRegistry()
 	registry.Register(tools.Calculator{})
 	registry.Register(tools.NewWebSearch())
-
-	// Inject the tool list into the prompt template.
-	systemPrompt := strings.ReplaceAll(reactPrompt, "{{TOOLS}}", registry.Descriptions())
 
 	client := ollama.New(baseURL, model)
 	ag := agent.NewReActAgent(client, registry, systemPrompt)
