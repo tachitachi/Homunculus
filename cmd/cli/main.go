@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -55,6 +56,22 @@ func main() {
 		}
 
 		fmt.Println()
+
+		if query == "/history" {
+			msgs := ag.Messages()
+			if msgs == nil {
+				fmt.Println("(no history yet)")
+			} else {
+				b, err := json.MarshalIndent(msgs, "", "  ")
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				} else {
+					fmt.Println(string(b))
+				}
+			}
+			fmt.Println()
+			continue
+		}
 
 		answer, err := ag.Run(context.Background(), query)
 		if err != nil {

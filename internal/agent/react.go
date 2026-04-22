@@ -26,6 +26,10 @@ type ReActAgent struct {
 	OnAction func(tool, input string)
 	// OnObservation is called with the tool result after execution. Optional.
 	OnObservation func(result string)
+
+	// lastMessages holds the message history from the most recent Run call,
+	// captured just before each request to the model. Exposed via Messages().
+	lastMessages []ollama.Message
 }
 
 // NewReActAgent returns a ReActAgent with sensible defaults.
@@ -36,6 +40,13 @@ func NewReActAgent(client *ollama.Client, registry *tools.Registry, systemPrompt
 		MaxIterations: defaultMaxIterations,
 		SystemPrompt:  systemPrompt,
 	}
+}
+
+// Messages returns the message history from the most recent Run call, as it
+// was just before the last request to the model. Returns nil if Run has not
+// been called yet.
+func (a *ReActAgent) Messages() []ollama.Message {
+	return a.lastMessages
 }
 
 // Run executes the tool-calling loop for the given query and returns the final
@@ -51,6 +62,9 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 	}
 
 	for i := range a.MaxIterations {
+		// Snapshot before the call so Messages() reflects what was sent.
+		a.lastMessages = messages
+
 		msg, err := a.Client.ChatWithTools(ctx, messages, ollamaTools, func(chunk string) {
 			fmt.Print(chunk)
 		})
