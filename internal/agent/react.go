@@ -12,10 +12,8 @@ import (
 const defaultMaxIterations = 10
 
 // ReActAgent runs a tool-calling loop against an Ollama model using the
-// model's native tool-calling support. It sends the available tools in each
-// request and dispatches whatever tool calls the model returns until the model
-// produces a plain-text reply (no tool calls), which is treated as the final
-// answer.
+// model's native tool-calling support. Message history is preserved across
+// Run calls so the model retains context from prior turns.
 type ReActAgent struct {
 	Client        *ollama.Client
 	Registry      *tools.Registry
@@ -27,9 +25,9 @@ type ReActAgent struct {
 	// OnObservation is called with the tool result after execution. Optional.
 	OnObservation func(result string)
 
-	// lastMessages holds the message history from the most recent Run call,
-	// captured just before each request to the model. Exposed via Messages().
-	lastMessages []ollama.Message
+	// messages is the persistent conversation history. It is initialised with
+	// the system prompt and grows with every user turn, tool call, and reply.
+	messages []ollama.Message
 }
 
 // NewReActAgent returns a ReActAgent with sensible defaults.
@@ -39,33 +37,27 @@ func NewReActAgent(client *ollama.Client, registry *tools.Registry, systemPrompt
 		Registry:      registry,
 		MaxIterations: defaultMaxIterations,
 		SystemPrompt:  systemPrompt,
+		messages:      []ollama.Message{{Role: "system", Content: systemPrompt}},
 	}
 }
 
-// Messages returns the message history from the most recent Run call, as it
-// was just before the last request to the model. Returns nil if Run has not
-// been called yet.
+// Messages returns the full conversation history, including the system prompt,
+// all user turns, assistant replies, tool calls, and tool results.
 func (a *ReActAgent) Messages() []ollama.Message {
-	return a.lastMessages
+	return a.messages
 }
 
-// Run executes the tool-calling loop for the given query and returns the final
-// answer. Each iteration calls the model with the full message history and the
-// tool definitions. If the model responds with tool calls they are executed and
-// their results appended to the history before the next iteration. When the
-// model responds with no tool calls its content is returned as the answer.
+// Run appends query to the conversation history and executes the tool-calling
+// loop. Each iteration calls the model with the full history and available
+// tools. Tool calls are executed and their results appended before the next
+// iteration. When the model replies with no tool calls its content is returned
+// as the final answer and appended to history for future turns.
 func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 	ollamaTools := a.buildTools()
-	messages := []ollama.Message{
-		{Role: "system", Content: a.SystemPrompt},
-		{Role: "user", Content: query},
-	}
+	a.messages = append(a.messages, ollama.Message{Role: "user", Content: query})
 
 	for i := range a.MaxIterations {
-		// Snapshot before the call so Messages() reflects what was sent.
-		a.lastMessages = messages
-
-		msg, err := a.Client.ChatWithTools(ctx, messages, ollamaTools, func(chunk string) {
+		msg, err := a.Client.ChatWithTools(ctx, a.messages, ollamaTools, func(chunk string) {
 			fmt.Print(chunk)
 		})
 		fmt.Println() // newline after streamed output
@@ -75,11 +67,12 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 
 		// No tool calls — the model produced a final text reply.
 		if len(msg.ToolCalls) == 0 {
+			a.messages = append(a.messages, msg)
 			return msg.Content, nil
 		}
 
 		// Append the assistant turn (containing tool_calls) to history.
-		messages = append(messages, msg)
+		a.messages = append(a.messages, msg)
 
 		// Execute each tool call and append results as tool-role messages.
 		for _, tc := range msg.ToolCalls {
@@ -107,7 +100,7 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 				a.OnObservation(obs)
 			}
 
-			messages = append(messages, ollama.Message{
+			a.messages = append(a.messages, ollama.Message{
 				Role:    "tool",
 				Content: obs,
 			})

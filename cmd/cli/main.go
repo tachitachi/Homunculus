@@ -58,16 +58,11 @@ func main() {
 		fmt.Println()
 
 		if query == "/history" {
-			msgs := ag.Messages()
-			if msgs == nil {
-				fmt.Println("(no history yet)")
+			b, err := json.MarshalIndent(ag.Messages(), "", "  ")
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			} else {
-				b, err := json.MarshalIndent(msgs, "", "  ")
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				} else {
-					fmt.Println(string(b))
-				}
+				fmt.Println(string(b))
 			}
 			fmt.Println()
 			continue
