@@ -51,7 +51,10 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 	}
 
 	for i := range a.MaxIterations {
-		msg, err := a.Client.ChatWithTools(ctx, messages, ollamaTools)
+		msg, err := a.Client.ChatWithTools(ctx, messages, ollamaTools, func(chunk string) {
+			fmt.Print(chunk)
+		})
+		fmt.Println() // newline after streamed output
 		if err != nil {
 			return "", fmt.Errorf("react: model error on iteration %d: %w", i+1, err)
 		}

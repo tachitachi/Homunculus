@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -51,6 +52,7 @@ type ToolCall struct {
 type Message struct {
 	Role      string     `json:"role"`
 	Content   string     `json:"content"`
+	Thinking  string     `json:"thinking,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -193,14 +195,19 @@ func (c *Client) ChatStream(ctx context.Context, messages []Message, opts *Optio
 }
 
 // ChatWithTools sends messages and tool definitions to Ollama and returns the
-// full assistant Message. The caller checks Message.ToolCalls to determine
-// whether the model wants to invoke a tool or has produced a text reply.
-// Tool calling requires stream=false.
-func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []Tool) (Message, error) {
+// full assistant Message. Text chunks are streamed and passed to onChunk as
+// they arrive (pass nil to suppress streaming output). The caller checks
+// Message.ToolCalls on the returned Message to determine whether the model
+// wants to invoke a tool or has produced a plain-text reply.
+//
+// Tool calls, if any, may appear before the final done=true chunk (the final
+// done=true chunk would have empty content and thinking). Text content
+// is accumulated across all chunks and set on the returned Message.Content.
+func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []Tool, onChunk func(string)) (Message, error) {
 	body, err := json.Marshal(chatRequest{
 		Model:    c.model,
 		Messages: messages,
-		Stream:   false,
+		Stream:   true,
 		Tools:    tools,
 	})
 	if err != nil {
@@ -223,10 +230,54 @@ func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []
 		return Message{}, fmt.Errorf("ollama: unexpected status %d", resp.StatusCode)
 	}
 
-	var cr chatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		return Message{}, fmt.Errorf("ollama: decode response: %w", err)
+	var (
+		text     strings.Builder
+		finalMsg Message
+	)
+	tool_calls := make([]ToolCall, 0)
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var cr chatResponse
+		if err := json.Unmarshal(line, &cr); err != nil {
+			return Message{}, fmt.Errorf("ollama: decode chunk: %w", err)
+		}
+
+		if cr.Message.Thinking != "" {
+			if onChunk != nil {
+				onChunk(cr.Message.Thinking)
+			}
+		}
+
+		if cr.Message.Content != "" {
+			if onChunk != nil {
+				onChunk(cr.Message.Content)
+			}
+			text.WriteString(cr.Message.Content)
+		}
+
+		if cr.Message.ToolCalls != nil {
+			tool_calls = append(tool_calls, cr.Message.ToolCalls...)
+		}
+
+		if cr.Done {
+			// The final chunk carries tool_calls (if any); preserve them and
+			// overwrite content with the full accumulated text.
+			finalMsg = cr.Message
+			finalMsg.Content = text.String()
+			finalMsg.ToolCalls = tool_calls
+			break
+		}
 	}
 
-	return cr.Message, nil
+	if err := scanner.Err(); err != nil {
+		return Message{}, fmt.Errorf("ollama: scan: %w", err)
+	}
+
+	return finalMsg, nil
 }
