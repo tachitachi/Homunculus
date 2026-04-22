@@ -32,6 +32,8 @@ Homunculus is a learning-first project that builds a coding AI agent from first 
 
 **Infrastructure:** Every dependency runs in a Docker container. `docker compose up` is the only command needed to go from zero to a running agent.
 
+**Learning log:** [`LEARNINGS.md`](LEARNINGS.md) records what we actually discovered while building each phase — things that surprised us, mistakes that had to be corrected, and decisions that turned out differently than expected. Add an entry whenever something non-obvious comes up. It is not a polished document; it is a trail of our thought process, and it only has value if it stays current.
+
 ---
 
 ## Architecture Overview
@@ -211,7 +213,7 @@ task lint
 | Phase | Title | Status | Key Concept |
 |-------|-------|--------|-------------|
 | [1](#phase-1--foundation-ollama--gemma-4-e4b--go-client) | Foundation | COMPLETE | Raw HTTP client, Docker Compose |
-| [2](#phase-2--react-loop-reasoning--acting-from-scratch) | ReAct Loop | TODO | Agents are just a loop + a prompt + a parser |
+| [2](#phase-2--react-loop-reasoning--acting-from-scratch) | ReAct Loop | IN PROGRESS | Agents are just a loop + a prompt + a parser |
 | [3](#phase-3--tool-expansion-code-sandbox--file-operations) | Tool Expansion | TODO | Docker as a security primitive |
 | [4](#phase-4--memory-conversation-history--vector-store) | Memory | TODO | Statelessness, embeddings, ChromaDB |
 | [5](#phase-5--coding-agent-write-run-debug-iterate) | Coding Agent | TODO | Self-correction, test-driven loops |
