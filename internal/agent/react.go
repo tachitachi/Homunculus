@@ -50,11 +50,17 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 		{Role: "user", Content: query},
 	}
 
+	// Stop generation the moment the model writes "\nObservation:" so it cannot
+	// hallucinate the tool result. The real observation is injected by this loop.
+	opts := &ollama.Options{
+		Stop: []string{"Observation:"},
+	}
+
 	malformed := 0
 
 	for i := range a.MaxIterations {
 		var sb strings.Builder
-		err := a.Client.ChatStream(ctx, messages, nil, func(chunk string) {
+		err := a.Client.ChatStream(ctx, messages, opts, func(chunk string) {
 			fmt.Print(chunk)
 			sb.WriteString(chunk)
 		})

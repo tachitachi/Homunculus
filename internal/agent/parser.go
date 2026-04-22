@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"fmt"
 	"strings"
 )
 
@@ -63,6 +64,7 @@ func ParseResponse(text string) ParsedResponse {
 			inFinalAnswer = false
 			inActionInput = false
 			tool = strings.TrimSpace(line[len("action:"):])
+			fmt.Printf("Should call tool: %s\n", tool)
 
 		case strings.HasPrefix(lower, "thought:"):
 			// Thought lines are logged by the caller; nothing to capture here.

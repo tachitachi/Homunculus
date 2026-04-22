@@ -32,6 +32,13 @@ func main() {
 
 	client := ollama.New(baseURL, model)
 	ag := agent.NewReActAgent(client, registry, systemPrompt)
+	ag.OnAction = func(tool, input string) {
+		fmt.Printf("[Real] Action: %s\n", tool)
+		fmt.Printf("[Real] Action Input: %s\n", input)
+	}
+	ag.OnObservation = func(result string) {
+		fmt.Printf("[Real] Observation: %s\n\n", result)
+	}
 
 	fmt.Println("Homunculus — Phase 2 (ReAct)")
 	fmt.Printf("Model: %s at %s\n", model, baseURL)

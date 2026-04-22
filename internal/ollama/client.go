@@ -19,9 +19,10 @@ type Message struct {
 // Options controls model sampling behavior. Zero values are omitted so Ollama
 // uses its own defaults.
 type Options struct {
-	Temperature float64 `json:"temperature,omitempty"`
-	NumCtx      int     `json:"num_ctx,omitempty"`
-	TopP        float64 `json:"top_p,omitempty"`
+	Temperature float64  `json:"temperature,omitempty"`
+	NumCtx      int      `json:"num_ctx,omitempty"`
+	TopP        float64  `json:"top_p,omitempty"`
+	Stop        []string `json:"stop,omitempty"`
 }
 
 // chatRequest is the body sent to POST /api/chat.
