@@ -87,3 +87,14 @@ Fixing this required moving `messages` from a local variable to a field on `ReAc
 ### The `/history` command is an invaluable debugging tool
 
 When the model behaves unexpectedly, the single most useful thing to inspect is the exact JSON that was sent to it. Adding `/history` as an in-REPL command that pretty-prints `json.MarshalIndent(ag.Messages(), "", "  ")` immediately made it clear when history was being reset, when tool results were missing from the context, or when the role sequence was wrong.
+
+### Function description and parameter description serve different purposes
+
+Initially the `Tool` interface had a single `Description()` method that was used as the function-level description in the JSON Schema. The parameter's `description` field was left as a generic placeholder ("The input to pass to the tool."), which is useless — models use the parameter description as the primary signal when forming input values.
+
+The right split:
+
+- **Function description** (`Description()`) — answers "what does this tool do?" in one or two sentences. Gives the model enough context to decide *whether* to call the tool.
+- **Parameter description** (`InputDescription()`) — answers "what does a valid input look like?" with format rules, constraints, and examples. This is what the model reads when it actually *fills in* the value.
+
+For the calculator, this distinction matters a lot: `^` is bitwise XOR in govaluate, not exponentiation — the correct operator is `**`. Without a precise parameter description spelling this out (and calling it out as `IMPORTANT`), the model will reliably use `^` and get wrong answers. Putting this in the function description alone is not enough; it needs to be right next to the input field where the model is constructing the value.

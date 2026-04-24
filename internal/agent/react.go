@@ -127,7 +127,7 @@ func (a *ReActAgent) buildTools() []ollama.Tool {
 					Properties: map[string]ollama.ToolParameterProperty{
 						"input": {
 							Type:        "string",
-							Description: "The input to pass to the tool.",
+							Description: t.InputDescription(),
 						},
 					},
 					Required: []string{"input"},

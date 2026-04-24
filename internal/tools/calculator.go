@@ -16,9 +16,28 @@ type Calculator struct{}
 func (Calculator) Name() string { return "calculator" }
 
 func (Calculator) Description() string {
-	return "Evaluate a mathematical expression. Input must be a single-line math " +
-		"expression using +, -, *, /, **, (, ), and numeric literals. " +
-		`Example: "3.14159 * 5 * 5"`
+	return "Evaluate a mathematical expression and return the result as a number."
+}
+
+func (Calculator) InputDescription() string {
+	return `A single-line mathematical expression. Supported syntax:
+
+Arithmetic:    +  -  *  /  %  ** (exponentiation — use ** NOT ^)
+Bitwise:       &  |  ^  ~  <<  >>   (^ is bitwise XOR, not exponentiation)
+Comparison:    ==  !=  >  <  >=  <=  (return 1.0 or 0.0)
+Logical:       &&  ||  !
+Ternary:       condition ? valueIfTrue : valueIfFalse
+Null coalesce: ??
+Grouping:      ( )
+Arrays/IN:     value IN (a, b, c)
+
+All numeric literals are float64. Strings must be quoted.
+IMPORTANT: ^ is bitwise XOR — always use ** for exponentiation.
+
+Examples:
+  3.14159 * 5 ** 2
+  (100 - 32) * 5 / 9
+  2 ** 10`
 }
 
 func (Calculator) Run(_ context.Context, input string) (s string, e error) {

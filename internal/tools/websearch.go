@@ -26,8 +26,22 @@ func NewWebSearch() *WebSearch {
 func (WebSearch) Name() string { return "web_search" }
 
 func (WebSearch) Description() string {
-	return "Search the web for current information. Input is a plain-English search query. " +
-		"Returns up to 3 results with title, URL, and a short snippet."
+	return "Search the web for current information. Returns up to 3 results with title, URL, and a short snippet."
+}
+
+func (WebSearch) InputDescription() string {
+	return `A plain-English search query, the same as you would type into a search engine.
+
+Guidelines:
+  - Use specific keywords rather than full sentences
+  - For factual lookups include relevant context (e.g. "Eiffel Tower height metres")
+  - For current events include a year if freshness matters (e.g. "Go 1.24 release notes 2025")
+  - Do not use boolean operators or special syntax — plain keywords only
+
+Examples:
+  capital of Japan
+  Golang context package usage
+  Docker compose healthcheck syntax`
 }
 
 // ddgResponse is the subset of the DuckDuckGo instant answer JSON we care about.
