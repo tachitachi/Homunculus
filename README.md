@@ -213,7 +213,7 @@ task lint
 | Phase | Title | Status | Key Concept |
 |-------|-------|--------|-------------|
 | [1](#phase-1--foundation-ollama--gemma-4-e4b--go-client) | Foundation | COMPLETE | Raw HTTP client, Docker Compose |
-| [2](#phase-2--react-loop-reasoning--acting-from-scratch) | ReAct Loop | IN PROGRESS | Agents are just a loop + a prompt + a parser |
+| [2](#phase-2--tool-calling-agent) | Tool-Calling Agent | IN PROGRESS | Agents are a loop + native tool calling + conversation history |
 | [3](#phase-3--tool-expansion-code-sandbox--file-operations) | Tool Expansion | TODO | Docker as a security primitive |
 | [4](#phase-4--memory-conversation-history--vector-store) | Memory | TODO | Statelessness, embeddings, ChromaDB |
 | [5](#phase-5--coding-agent-write-run-debug-iterate) | Coding Agent | TODO | Self-correction, test-driven loops |
@@ -227,9 +227,9 @@ Update the Status column as you complete each phase: `TODO` → `IN PROGRESS` �
 
 ### What you will learn
 
-- The Ollama HTTP API: `/api/chat`, `/api/pull`, `/api/tags`, `/api/embeddings`
-- What a chat completion request actually contains: `model`, `messages`, `stream`, `options`
-- What model parameters do: `temperature` (randomness), `top_p` (nucleus sampling), `num_ctx` (context window size in tokens)
+- The OpenAI-compatible HTTP API: `/v1/chat/completions`, `/api/pull`, `/api/tags`, `/api/embeddings`
+- What a chat completion request actually contains: `model`, `messages`, `stream`, and top-level parameter fields
+- What model parameters do: `temperature` (randomness), `top_p` (nucleus sampling), `max_tokens` (maximum tokens to generate)
 - Docker Compose networking: service names as hostnames, health checks, volume persistence
 - Go's `net/http` package for making typed HTTP requests and decoding JSON responses
 
@@ -242,33 +242,28 @@ The `Client` struct is the only way the rest of the codebase talks to Ollama. By
 ```go
 type Client struct {
     BaseURL    string
+    Model      string
     HTTPClient *http.Client
 }
 
 type Message struct {
-    Role    string `json:"role"`
-    Content string `json:"content"`
-}
-
-type ChatRequest struct {
-    Model    string    `json:"model"`
-    Messages []Message `json:"messages"`
-    Stream   bool      `json:"stream"`
-    Options  Options   `json:"options,omitempty"`
+    Role       string     `json:"role"`
+    Content    string     `json:"content,omitempty"`
+    ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+    ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 type Options struct {
-    Temperature float64 `json:"temperature,omitempty"`
-    NumCtx      int     `json:"num_ctx,omitempty"`
+    Temperature float64  `json:"temperature,omitempty"`
+    MaxTokens   int      `json:"max_tokens,omitempty"`
+    TopP        float64  `json:"top_p,omitempty"`
+    Stop        []string `json:"stop,omitempty"`
 }
 
-type ChatResponse struct {
-    Message Message `json:"message"`
-    Done    bool    `json:"done"`
-}
-
-func (c *Client) Chat(ctx context.Context, req ChatRequest) (string, error)
-func (c *Client) ChatStream(ctx context.Context, req ChatRequest, fn func(chunk string)) error
+func New(baseURL, model string) *Client
+func (c *Client) Chat(ctx context.Context, messages []Message, opts *Options) (string, error)
+func (c *Client) ChatStream(ctx context.Context, messages []Message, opts *Options, onChunk func(string)) error
+func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []Tool, onChunk func(string)) (Message, error)
 ```
 
 **`docker-compose.yml`** (Phase 1 services only):
@@ -335,102 +330,114 @@ Pass criteria: `Chat()` returns a non-empty string. `ChatStream()` calls the cal
 
 ---
 
-## Phase 2 — ReAct Loop: Reasoning + Acting from Scratch
+## Phase 2 — Tool-Calling Agent
 
 ### What you will learn
 
-- What a ReAct loop actually is: a structured text format enforced by the prompt, a parser that extracts intent from that text, and a `for` loop that keeps calling the model until it's done
-- There is no magic: "tool calling" in every agent framework is structured text parsing underneath
-- How a tool registry works: a map from string names to typed implementations
-- How prompt engineering defines agent behavior — the system prompt IS the agent's architecture
-- How to handle a stuck agent: max iterations, identical-output detection, forced termination
+- How native tool calling works: tools are passed as JSON Schema to the model, and the model returns structured `tool_calls` rather than free text
+- Why native tool calling is more robust than text-based ReAct: no prompt-engineered output format, no parser, no stop tokens, no malformed-response retries
+- How the OpenAI-compatible `/v1/chat/completions` API works — the standard interface supported by Ollama, vLLM, and every major inference server
+- Why tool call arguments are a JSON string on the wire, not an object, and how to handle streaming tool calls that arrive as incremental chunks
+- How to design a tool interface that gives the model precise input format guidance through separate function-level and parameter-level descriptions
+- How conversation history accumulates across turns and why the final answer must be appended to history for follow-up questions to work
 
 ### What you will build
-
-The ReAct format is a contract between your prompt and your parser:
-
-```
-Thought: I need to calculate the area of a circle with radius 5.
-Action: calculator
-Action Input: 3.14159 * 5 * 5
-Observation: 78.53975
-
-Thought: I have the answer.
-Final Answer: The area is approximately 78.54 square units.
-```
-
-Your code enforces this contract by:
-1. Injecting the format definition into the system prompt
-2. Parsing each model response for `Thought:`, `Action:`, `Action Input:`, or `Final Answer:`
-3. When `Action:` is found, looking up the tool in the registry, calling `Run()`, and appending `Observation: <result>` to the message history
-4. When `Final Answer:` is found, returning it and stopping
-5. When neither is found (malformed output), injecting an error observation and retrying
 
 **`internal/tools/tool.go`**
 
 ```go
-// Tool is the interface every tool must implement.
-// Name and Description are injected into the system prompt automatically.
-// Run receives the raw "Action Input" string and returns a result or error.
 type Tool interface {
+    // Name returns the identifier used to invoke this tool.
     Name() string
+
+    // Description answers "what does this tool do?" — used as the
+    // function-level description in the JSON Schema sent to the model.
     Description() string
+
+    // InputDescription answers "what does a valid input look like?" —
+    // used as the parameter-level description, which is what the model
+    // reads when it is actually forming the input value.
+    InputDescription() string
+
     Run(ctx context.Context, input string) (string, error)
 }
 ```
 
-The compiler enforces this contract. If `calculator.go` forgets to implement `Description()`, the build fails — you find out at compile time, not when the agent calls a tool at runtime.
+The split between `Description` and `InputDescription` matters: the model uses the parameter description — not the function description — when filling in the input value. Syntax constraints, operator gotchas, and examples belong in `InputDescription`.
 
-**`internal/agent/parser.go`**
+**`internal/ollama/client.go`** — extended with tool calling support:
 
 ```go
-type ResponseType string
-
-const (
-    TypeAction      ResponseType = "action"
-    TypeFinalAnswer ResponseType = "final"
-    TypeMalformed   ResponseType = "malformed"
-)
-
-type ParsedResponse struct {
-    Type   ResponseType
-    Tool   string
-    Input  string
-    Answer string
+// Tool is the JSON Schema definition passed to the model.
+type Tool struct {
+    Type     string       `json:"type"` // always "function"
+    Function ToolFunction `json:"function"`
 }
 
-func ParseResponse(text string) ParsedResponse
+// ToolCall is one tool invocation returned by the model.
+type ToolCall struct {
+    ID       string           `json:"id,omitempty"`
+    Function ToolCallFunction `json:"function"`
+}
+
+// ToolCallFunction holds the name and raw JSON arguments string.
+type ToolCallFunction struct {
+    Name      string `json:"name"`
+    Arguments string `json:"arguments"` // JSON string, not an object
+}
+
+// Message gains ToolCalls (for assistant turns) and ToolCallID (for tool result turns).
+type Message struct {
+    Role       string     `json:"role"`
+    Content    string     `json:"content,omitempty"`
+    ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+    ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+func (c *Client) ChatWithTools(
+    ctx context.Context,
+    messages []Message,
+    tools []Tool,
+    onChunk func(string), // called with streamed text chunks; nil to suppress
+) (Message, error)
 ```
 
-**`internal/agent/react.go`**
+**`internal/agent/react.go`** — the agent loop:
 
 ```go
 type ReActAgent struct {
     Client        *ollama.Client
     Registry      *tools.Registry
     MaxIterations int
-    Model         string
     SystemPrompt  string
+    OnAction      func(tool, input string)
+    OnObservation func(result string)
 }
-
-func (a *ReActAgent) Run(ctx context.Context, query string) (string, error)
 ```
 
-**`internal/tools/calculator.go`** — Uses the `govaluate` library for safe expression evaluation. Never `eval()`. The model's input is untrusted text; passing it to a math parser limits the blast radius.
+The `Run` loop:
+1. Append the user query to persistent message history
+2. Call `ChatWithTools` with the full history and all registered tools
+3. If the response has `ToolCalls`: execute each tool, append `role: "tool"` result messages with matching `tool_call_id`, repeat
+4. If the response has no `ToolCalls`: append the assistant message to history and return the content as the final answer
 
-**`internal/tools/websearch.go`** — Calls DuckDuckGo's instant answer JSON endpoint. No API key required. Returns the top 3 results as formatted text (title, URL, snippet).
+**`internal/tools/calculator.go`** — uses the `govaluate` library for safe expression evaluation. Never `eval()`. Important syntax note captured in `InputDescription`: `**` is exponentiation, `^` is bitwise XOR.
+
+**`internal/tools/websearch.go`** — calls DuckDuckGo's instant answer JSON endpoint. No API key required. Returns the top 3 results as formatted text (title, URL, snippet).
 
 ### How to run
 
 ```bash
 docker compose run --rm cli
-# > What is 1337 multiplied by 42?
-# Thought: I need to multiply 1337 by 42.
-# Action: calculator
-# Action Input: 1337 * 42
-# Observation: 56154
-# Final Answer: 1337 × 42 = 56,154.
+# > What is the area of a circle with radius 5?
+# [Real] Action: calculator
+# [Real] Action Input: 3.14159 * 5 ** 2
+# [Real] Observation: 78.53975
+#
+# Final Answer: The area of a circle with radius 5 is approximately 78.54 square units.
 ```
+
+Type `/history` at any prompt to print the raw JSON message history that was last sent to the model — useful for debugging unexpected model behaviour.
 
 ### How to verify
 
@@ -439,7 +446,7 @@ Manually test three query types:
 2. Current events query → agent invokes `web_search`, cites source in final answer
 3. Factual query with known answer → agent answers directly without invoking any tool
 
-Inspect the logs: every `Thought`, `Action`, `Action Input`, and `Observation` should appear. The loop count should be visible. Any malformed responses should trigger a retry with an error observation.
+Then test multi-turn memory: ask a math question, then ask "what was that number again?" — the model should refer back to the result from the previous turn without recomputing it.
 
 ---
 
@@ -855,8 +862,6 @@ homunculus/
 │   ├── agent/
 │   │   ├── react.go            # Phase 2: ReAct loop engine
 │   │   ├── react_test.go
-│   │   ├── parser.go           # Typed response parser (ParsedResponse struct)
-│   │   ├── parser_test.go
 │   │   ├── coding.go           # Phase 5: CodingAgent (embeds ReActAgent)
 │   │   └── coding_test.go
 │   ├── tools/
@@ -891,7 +896,6 @@ homunculus/
 │
 ├── prompts/                    # Plain text prompt files — edit without recompiling
 │   ├── system.txt              # Base system prompt (injected in all phases)
-│   ├── react.txt               # ReAct format definition + examples
 │   └── coding_agent.txt        # Phase 5 coding specialization
 │
 ├── ui/
@@ -911,10 +915,10 @@ homunculus/
 │   ├── pull_model.sh           # Manually trigger model pull: docker exec into ollama
 │   └── run_phase.sh            # Start only the services for a given phase
 │
+├── LEARNINGS.md                # Running log of findings, surprises, and corrections by phase
 └── docs/
     ├── architecture.md         # Deeper architecture notes and decision rationale
-    ├── prompts.md              # Prompt engineering notes and iteration history
-    └── learnings.md            # Personal notes: surprises, things that didn't work
+    └── prompts.md              # Prompt engineering notes and iteration history
 ```
 
 ---
@@ -957,7 +961,7 @@ Running model-generated code in the same process as the agent creates an unbound
 
 **ReAct** — Reasoning + Acting. A prompting pattern (Yao et al., 2022) where the model interleaves natural language reasoning ("Thought") with structured actions ("Action"). The key insight: making the reasoning explicit improves task completion versus asking the model to produce a final answer directly.
 
-**Tool calling** — The mechanism by which an agent invokes external functions. In this project, tool calling is implemented as structured text parsing: the model outputs `Action: tool_name` and `Action Input: ...`, and the parser extracts these to call the registered Go function. All "native" tool calling in LLMs is the same mechanism, just with the parsing moved to the model weights.
+**Tool calling** — The mechanism by which an agent invokes external functions. In this project, tools are described as JSON Schema objects and passed in the `tools` field of the chat request. When the model wants to call a tool it emits a structured `tool_calls` field (not free text), containing the function name and arguments. The agent loop executes the matching Go function, appends the result as a `tool` role message, and continues until the model produces a final text reply with no tool calls.
 
 **Context window** — The maximum number of tokens (roughly: word pieces) a model can process in a single call. Everything the model "knows" about the current conversation must fit in this window. Gemma 4 E4B supports 128K tokens, but long coding sessions with large code blocks can exhaust this.
 
@@ -990,13 +994,6 @@ docker exec -it homunculus-ollama-1 ollama pull gemma4:e4b
 
 Gemma 4 E4B requires approximately 10 GB RAM when loaded. If Docker Desktop is configured with less, increase the memory limit in Docker Desktop → Settings → Resources → Memory. Minimum recommendation: 12 GB allocated to Docker.
 
-**Agent outputs malformed text instead of Thought/Action/Final Answer**
-
-This is expected occasionally with 4B models. The parser handles it by injecting a format-error observation and retrying (up to 3 times). If it happens consistently, try:
-- Lowering `temperature` to 0.1 in `.env` (less randomness)
-- Ensuring `prompts/react.txt` contains a clear format example
-- Increasing `num_ctx` if the conversation is long (more context helps the model remember the format)
-
 **Sandbox returns timeout on all code**
 
 Check that the `sandbox` container is running (`docker compose ps`). Check that it can receive connections from the agent container:
@@ -1024,7 +1021,7 @@ go mod download
 
 ## Learnings Log
 
-Personal notes, surprises, and things that did not work as expected are tracked in [`docs/learnings.md`](docs/learnings.md). Update it after completing each phase — the goal is to capture the non-obvious insights while they are fresh, not to summarize what the code does (the code does that).
+Personal notes, surprises, and things that did not work as expected are tracked in [`LEARNINGS.md`](LEARNINGS.md). Update it after completing each phase — the goal is to capture the non-obvious insights while they are fresh, not to summarize what the code does (the code does that).
 
 Suggested structure per phase entry:
 - What surprised you
