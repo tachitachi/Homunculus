@@ -101,8 +101,9 @@ func (a *ReActAgent) Run(ctx context.Context, query string) (string, error) {
 			}
 
 			a.messages = append(a.messages, ollama.Message{
-				Role:    "tool",
-				Content: obs,
+				Role:       "tool",
+				Content:    obs,
+				ToolCallID: tc.ID,
 			})
 		}
 	}
@@ -138,15 +139,18 @@ func (a *ReActAgent) buildTools() []ollama.Tool {
 	return out
 }
 
-// argString extracts the "input" key from tool call arguments as a string.
-// If the key is absent or not a string, it falls back to JSON-encoding the
-// entire arguments map so the tool still receives something meaningful.
-func argString(args map[string]any) string {
-	if v, ok := args["input"]; ok {
+// argString extracts the "input" key from a JSON arguments string.
+// If the key is absent or the JSON cannot be parsed, it returns the raw
+// arguments string so the tool still receives something meaningful.
+func argString(args string) string {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(args), &m); err != nil {
+		return args
+	}
+	if v, ok := m["input"]; ok {
 		if s, ok := v.(string); ok {
 			return s
 		}
 	}
-	b, _ := json.Marshal(args)
-	return string(b)
+	return args
 }

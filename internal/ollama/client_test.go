@@ -3,6 +3,7 @@ package ollama_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,48 +13,64 @@ import (
 	"github.com/tachitachi/homunculus/internal/ollama"
 )
 
-// mockResponse builds the JSON body Ollama returns for a non-streaming chat.
+// openAIResponse mirrors the subset of /v1/chat/completions we care about.
+type openAIResponse struct {
+	Choices []struct {
+		Message struct {
+			Role    string  `json:"role"`
+			Content *string `json:"content"`
+		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
+	} `json:"choices"`
+}
+
+// mockResponse builds a non-streaming OpenAI-compatible response.
 func mockResponse(content string) []byte {
-	type msg struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
-	}
-	type resp struct {
-		Model   string `json:"model"`
-		Message msg    `json:"message"`
-		Done    bool   `json:"done"`
-	}
-	b, _ := json.Marshal(resp{
-		Model:   "test-model",
-		Message: msg{Role: "assistant", Content: content},
-		Done:    true,
+	b, _ := json.Marshal(openAIResponse{
+		Choices: []struct {
+			Message struct {
+				Role    string  `json:"role"`
+				Content *string `json:"content"`
+			} `json:"message"`
+			FinishReason string `json:"finish_reason"`
+		}{
+			{
+				Message: struct {
+					Role    string  `json:"role"`
+					Content *string `json:"content"`
+				}{Role: "assistant", Content: &content},
+				FinishReason: "stop",
+			},
+		},
 	})
 	return b
 }
 
-// mockStreamResponse builds the newline-delimited JSON Ollama returns for a
-// streaming chat. It splits content into individual-character chunks to verify
-// the client assembles them correctly.
-func mockStreamResponse(content string) []byte {
-	type msg struct {
-		Role    string `json:"role"`
+// mockSSEStream builds an OpenAI SSE stream that delivers content one
+// character at a time, matching the format the client must parse.
+func mockSSEStream(content string) []byte {
+	type delta struct {
 		Content string `json:"content"`
 	}
+	type choice struct {
+		Delta        delta  `json:"delta"`
+		FinishReason string `json:"finish_reason,omitempty"`
+	}
 	type chunk struct {
-		Message msg  `json:"message"`
-		Done    bool `json:"done"`
+		Choices []choice `json:"choices"`
 	}
 
 	var sb strings.Builder
-	for i, ch := range content {
-		c := chunk{
-			Message: msg{Role: "assistant", Content: string(ch)},
-			Done:    i == len(content)-1,
+	runes := []rune(content)
+	for i, ch := range runes {
+		c := chunk{Choices: []choice{{Delta: delta{Content: string(ch)}}}}
+		if i == len(runes)-1 {
+			c.Choices[0].FinishReason = "stop"
 		}
 		line, _ := json.Marshal(c)
-		sb.Write(line)
-		sb.WriteByte('\n')
+		fmt.Fprintf(&sb, "data: %s\n\n", line)
 	}
+	sb.WriteString("data: [DONE]\n\n")
 	return []byte(sb.String())
 }
 
@@ -64,14 +81,11 @@ func TestChat_Success(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Errorf("expected POST, got %s", r.Method)
 		}
-		if r.URL.Path != "/api/chat" {
-			t.Errorf("expected /api/chat, got %s", r.URL.Path)
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Errorf("expected /v1/chat/completions, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, err := w.Write(mockResponse(want))
-		if err != nil {
-			t.Errorf("failed to write mock response: %v", err)
-		}
+		w.Write(mockResponse(want))
 	}))
 	defer srv.Close()
 
@@ -104,11 +118,8 @@ func TestChatStream_Success(t *testing.T) {
 	want := "Hello!"
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		_, err := w.Write(mockStreamResponse(want))
-		if err != nil {
-			t.Errorf("failed to write mock stream response: %v", err)
-		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write(mockSSEStream(want))
 	}))
 	defer srv.Close()
 
@@ -128,17 +139,41 @@ func TestChatStream_Success(t *testing.T) {
 }
 
 func TestChatStream_CallbackNotCalledOnEmpty(t *testing.T) {
-	// Verify the client skips empty content chunks (can happen mid-stream).
+	// Verify the client skips chunks where content is empty or null.
+	emptyStr := ""
+	type delta struct {
+		Content *string `json:"content"`
+	}
+	type choice struct {
+		Delta        delta  `json:"delta"`
+		FinishReason string `json:"finish_reason,omitempty"`
+	}
+	type chunk struct {
+		Choices []choice `json:"choices"`
+	}
+
+	chunks := []chunk{
+		{Choices: []choice{{Delta: delta{Content: &emptyStr}}}},
+		{Choices: []choice{{Delta: delta{Content: nil}}}},
+	}
+	realContent := "Hi"
+	chunks = append(chunks, chunk{
+		Choices: []choice{{
+			Delta:        delta{Content: &realContent},
+			FinishReason: "stop",
+		}},
+	})
+
+	var sb strings.Builder
+	for _, c := range chunks {
+		line, _ := json.Marshal(c)
+		fmt.Fprintf(&sb, "data: %s\n\n", line)
+	}
+	sb.WriteString("data: [DONE]\n\n")
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Send a chunk with empty content followed by a real one.
-		lines := []string{
-			`{"message":{"role":"assistant","content":""},"done":false}`,
-			`{"message":{"role":"assistant","content":"Hi"},"done":true}`,
-		}
-		_, err := w.Write([]byte(strings.Join(lines, "\n") + "\n"))
-		if err != nil {
-			t.Errorf("failed to write mock stream response: %v", err)
-		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Write([]byte(sb.String()))
 	}))
 	defer srv.Close()
 
@@ -159,7 +194,7 @@ func TestChatStream_CallbackNotCalledOnEmpty(t *testing.T) {
 	}
 }
 
-// TestChat_Integration tests against a real Ollama instance.
+// TestChat_Integration tests against a real OpenAI-compatible server.
 // Run with: INTEGRATION=1 OLLAMA_BASE_URL=http://localhost:11434 go test ./internal/ollama/... -run Integration -v
 func TestChat_Integration(t *testing.T) {
 	if os.Getenv("INTEGRATION") == "" {

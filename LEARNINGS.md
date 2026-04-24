@@ -98,3 +98,44 @@ The right split:
 - **Parameter description** (`InputDescription()`) — answers "what does a valid input look like?" with format rules, constraints, and examples. This is what the model reads when it actually *fills in* the value.
 
 For the calculator, this distinction matters a lot: `^` is bitwise XOR in govaluate, not exponentiation — the correct operator is `**`. Without a precise parameter description spelling this out (and calling it out as `IMPORTANT`), the model will reliably use `^` and get wrong answers. Putting this in the function description alone is not enough; it needs to be right next to the input field where the model is constructing the value.
+
+---
+
+## General — OpenAI-Compatible API
+
+### Prefer `/v1/chat/completions` over Ollama's native `/api/chat`
+
+Ollama exposes two chat APIs: its own `/api/chat` and an OpenAI-compatible `/v1/chat/completions`. The native API is simpler on the surface (NDJSON streaming, options in a nested object) but is Ollama-specific. The OpenAI-compatible endpoint is supported by every serious inference server — Ollama, vLLM, LM Studio, llama.cpp, Together, etc. — making it the right default even when running locally.
+
+### The OpenAI streaming format is SSE, not NDJSON
+
+Ollama's native API streams newline-delimited JSON objects (`{"message":...,"done":false}`). The OpenAI-compatible endpoint uses Server-Sent Events: each line is prefixed with `data: `, and the stream ends with `data: [DONE]`. The scanner must strip the `data: ` prefix before parsing, and skip the sentinel rather than trying to unmarshal it.
+
+### Tool call arguments are a JSON string, not a JSON object
+
+In the OpenAI wire format, `tool_calls[].function.arguments` is a **string containing JSON** (e.g. `"{\"input\":\"2+2\"}"`), not a parsed object. This is intentional — it lets the model produce arguments incrementally as a character stream without the server needing to parse partial JSON. The client must unmarshal the string value to get the actual key/value pairs. Storing arguments as a `string` internally (rather than `map[string]any`) is the simplest approach because it round-trips correctly: the string serializes as a JSON string when sent back in message history, which is exactly what the API expects.
+
+### Tool call arguments stream as incremental string chunks indexed by `index`
+
+In streaming mode, tool calls don't arrive as complete objects on the final chunk the way Ollama's native API does. Instead, each streaming delta may contain a `tool_calls` array where each entry has an `index` field and a partial `function.arguments` string. The client must accumulate these fragments per index and join them before the call can be dispatched. The `id` and `name` arrive on the first delta for a given index; subsequent deltas only carry more argument characters.
+
+When the model issues multiple tool calls in parallel, the chunks from different calls interleave in the stream — the `index` field is the only thing that keeps them separate:
+
+```
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","function":{"name":"calculator","arguments":""}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"call_xyz","function":{"name":"web_search","arguments":""}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"input\":"}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"{\"input\":"}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\"2+2\"}"}}]}}]}
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"\"who won the 2024 election\"}"}}]}}]}
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+data: [DONE]
+```
+
+The `pending map[int]*partialCall` accumulator in `ChatWithTools` handles this correctly — each index gets its own builder, so interleaved chunks land in the right bucket regardless of arrival order.
+
+**Known improvement:** `react.go` currently executes tool calls sequentially in a `for` loop. When the model returns multiple tool calls they are independent by definition, so they could be dispatched concurrently with `sync.WaitGroup` or `errgroup`. This is worth doing once parallel tool use becomes common.
+
+### Tool result messages require `tool_call_id`
+
+In the OpenAI protocol, a `tool` role message must include a `tool_call_id` matching the `id` from the corresponding tool call. Without it, many servers will reject the request or the model will lose track of which result corresponds to which call. The `id` must be captured from the streamed tool call and threaded through to the result message — it cannot be fabricated.
