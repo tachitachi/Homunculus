@@ -21,7 +21,14 @@ func (Calculator) Description() string {
 		`Example: "3.14159 * 5 * 5"`
 }
 
-func (Calculator) Run(_ context.Context, input string) (string, error) {
+func (Calculator) Run(_ context.Context, input string) (s string, e error) {
+	defer func() {
+		if r := recover(); r != nil {
+			if pe, ok := r.(error); ok {
+				e = fmt.Errorf("invalid expression, possibly unknown parameter or invalid syntax: %w", pe)
+			}
+		}
+	}()
 	expr, err := govaluate.NewEvaluableExpression(strings.TrimSpace(input))
 	if err != nil {
 		return "", fmt.Errorf("invalid expression: %w", err)
