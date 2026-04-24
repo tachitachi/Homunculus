@@ -85,7 +85,7 @@ func TestChat_Success(t *testing.T) {
 			t.Errorf("expected /v1/chat/completions, got %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(mockResponse(want))
+		_, _ = w.Write(mockResponse(want))
 	}))
 	defer srv.Close()
 
@@ -119,7 +119,7 @@ func TestChatStream_Success(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write(mockSSEStream(want))
+		_, _ = w.Write(mockSSEStream(want))
 	}))
 	defer srv.Close()
 
@@ -173,7 +173,7 @@ func TestChatStream_CallbackNotCalledOnEmpty(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		w.Write([]byte(sb.String()))
+		_, _ = w.Write([]byte(sb.String()))
 	}))
 	defer srv.Close()
 

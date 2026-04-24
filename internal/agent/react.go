@@ -25,7 +25,7 @@ type ReActAgent struct {
 	// OnObservation is called with the tool result after execution. Optional.
 	OnObservation func(result string)
 
-	// messages is the persistent conversation history. It is initialised with
+	// messages is the persistent conversation history. It is initialized with
 	// the system prompt and grows with every user turn, tool call, and reply.
 	messages []ollama.Message
 }

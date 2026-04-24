@@ -34,7 +34,7 @@ func (WebSearch) InputDescription() string {
 
 Guidelines:
   - Use specific keywords rather than full sentences
-  - For factual lookups include relevant context (e.g. "Eiffel Tower height metres")
+  - For factual lookups include relevant context (e.g. "Eiffel Tower height meters")
   - For current events include a year if freshness matters (e.g. "Go 1.24 release notes 2025")
   - Do not use boolean operators or special syntax — plain keywords only
 
