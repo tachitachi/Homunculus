@@ -51,6 +51,7 @@ services:
       - OLLAMA_BASE_URL=http://ollama:11434
       - MODEL_NAME=${MODEL_NAME:-gemma4:e4b}
       - PROMPTS_DIR=/app/prompts
+      - DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
     volumes:
       - ./prompts:/app/prompts:ro   # live-edit prompts without rebuilding
     stdin_open: true

@@ -27,6 +27,7 @@ func main() {
 	registry := tools.NewRegistry()
 	registry.Register(tools.Calculator{})
 	registry.Register(tools.NewWebSearch())
+	registry.Register(tools.NewDiscordWebhook())
 
 	client := ollama.New(baseURL, model)
 	ag := agent.NewReActAgent(client, registry, systemPrompt)
