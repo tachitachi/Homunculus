@@ -49,6 +49,7 @@ type ToolCallFunction struct {
 type ToolCall struct {
 	ID       string           `json:"id,omitempty"`
 	Function ToolCallFunction `json:"function"`
+	Type     string           `json:"type"`
 }
 
 // Message is a single turn in a conversation.
@@ -347,7 +348,8 @@ func (c *Client) ChatWithTools(ctx context.Context, messages []Message, tools []
 	for i := range len(pending) {
 		p := pending[i]
 		msg.ToolCalls = append(msg.ToolCalls, ToolCall{
-			ID: p.id,
+			ID:   p.id,
+			Type: "function",
 			Function: ToolCallFunction{
 				Name:      p.name,
 				Arguments: p.args.String(),
